@@ -409,6 +409,7 @@ static aht20_dev_t aht20_dev;
 
 static int8_t aht20_i2c_read(uint16_t reg_addr, uint32_t reg_len, uint8_t *reg_data, uint32_t len, aht20_dev_t *dev) {
 #if (I2C_DRV_USED == I2C_DRV_HARD)
+    // Оставляем без изменений, так как при reg_len = 0 драйвер Telink работает корректно
     drv_i2c_read_series(dev->addr << 1, reg_addr, reg_len, reg_data, len);
     return (reg_i2c_status & FLD_I2C_NAK);
 #elif (I2C_DRV_USED == I2C_DRV_SOFT)
@@ -418,19 +419,27 @@ static int8_t aht20_i2c_read(uint16_t reg_addr, uint32_t reg_len, uint8_t *reg_d
 
 static int8_t aht20_i2c_write(uint16_t reg_addr, const uint8_t *reg_data, uint32_t len, aht20_dev_t *dev) {
 #if (I2C_DRV_USED == I2C_DRV_HARD)
-    drv_i2c_write_series(dev->addr << 1, reg_addr, 2, (uint8_t*)reg_data, len);
+    // ИСПРАВЛЕНО: Изменен 3-й аргумент с 2 на 1.
+    // Для AHT20/WHT20 длина команды (reg_addr) ВСЕГДА должна быть строго 1 байт.
+    drv_i2c_write_series(dev->addr << 1, reg_addr, 1, (uint8_t*)reg_data, len);
     return (reg_i2c_status & FLD_I2C_NAK);
 #elif (I2C_DRV_USED == I2C_DRV_SOFT)
-    uint8_t buff[3];
-    buff[0] = reg_addr;
-    if (len) {
-        buff[1] = reg_data[0];
-        buff[2] = reg_data[1];
-        len = 3;
+    // ИСПРАВЛЕНО: Убран хардкод индексов буфера и фиксированной длины (len = 3).
+    // Старый код приводил к выходу за пределы памяти при вызове aht20_reset_reg() и портил калибровку.
+    
+    uint8_t local_buff[3]; // Буфер: 1 байт под команду + до 2 байт параметров
+    local_buff[0] = (uint8_t)reg_addr; 
+    
+    if (len > 0) {
+        if (len > 2) len = 2; // Защита от переполнения локального буфера
+        for (uint32_t i = 0; i < len; i++) {
+            local_buff[i + 1] = reg_data[i];
+        }
+        len = len + 1; // Общая длина отправки = 1 байт команды + N байт данных
     } else {
-        len = 1;
+        len = 1; // Если данных нет (например, SOFT_RESET), отправляем только 1 байт команды
     }
-    return send_i2c_bytes(dev->addr << 1, buff, len);
+    return send_i2c_bytes(dev->addr << 1, local_buff, len);
 #endif
 }
 
